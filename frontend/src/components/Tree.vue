@@ -1,5 +1,5 @@
 <template>
-  <aside class="side">
+  <aside class="side" @dblclick="init()" title="双击此处刷新目录树">
     <div class="loading" v-if="tree === null"> 加载中 </div>
     <template v-else>
       <TreeNode
@@ -13,7 +13,7 @@
         @delete="onDelete" />
         <transition name="fade">
           <div v-if="showFilter" class="filter-wrapper" @click="showFilter = false">
-            <XFilter @choose-file="f => { showFilter = false }" :repo="repo" :files="files" />
+            <XFilter @choose-file="showFilter" :repo="repo" :files="files" />
           </div>
         </transition>
     </template>
@@ -43,8 +43,6 @@ export default {
     this.$bus.on('editor-ready', this.handleReady)
     this.$bus.on('tree-refresh', this.change)
   },
-  mounted () {
-  },
   beforeDestroy () {
     window.removeEventListener('keydown', this.keydownHandler)
     this.$bus.off('switch-repository', this.init)
@@ -52,6 +50,9 @@ export default {
     this.$bus.off('tree-refresh', this.change)
   },
   methods: {
+    closeCurrentFile () {
+      this.file = null
+    },
     handleSelect (file) {
       if (this.editorReady) {
         this.file = file
@@ -60,8 +61,13 @@ export default {
     },
     handleReady () {
       this.editorReady = true
+
+      // 第一次打开此程序
+      if (!Object.keys(window.localStorage).find(x => x.endsWith('_open_time'))) {
+        this.$bus.$emit('toggle-readme')
+      }
     },
-    init (repo = null) {
+    init (repo = null, path = null) {
       if (repo) {
         this.repo = repo
         this.tree = null
@@ -70,6 +76,12 @@ export default {
 
       File.tree(this.repo, tree => {
         this.tree = tree
+
+        if (path) {
+          this.$nextTick(() => {
+            this.$bus.emit('choose-file', { path })
+          })
+        }
       })
     },
     onDelete (path) {
@@ -80,20 +92,34 @@ export default {
 
       this.init()
     },
-    onMove (oldPath) {
+    onMove ({ oldPath, newPath }) {
       // 移动了正在编辑的文件或者其父目录
       if (this.file && this.file.path.startsWith(oldPath)) {
         this.file = null
+        this.init(null, newPath)
+      } else {
+        this.init()
       }
-
-      this.init()
     },
     change (path) {
-      this.init()
+      this.init(null, path)
     },
     keydownHandler (e) {
-      if (e.key === 'p' && e.ctrlKey) {
-        this.showFilter = true
+      if (e.key === 'i' && e.ctrlKey && e.altKey) {
+        this.showFilter = f => {
+          if (this.file) {
+            const relativePath = f.path.replace(this.file.path.substr(0, this.file.path.lastIndexOf('/')), '.')
+            this.$bus.emit('editor-insert-value', `[${f.name.replace(/\.[^.]$/, '')}](${encodeURI(relativePath)})`)
+          }
+          this.showFilter = false
+        }
+        e.preventDefault()
+        e.stopPropagation()
+      } else if (e.key === 'p' && e.ctrlKey) {
+        this.showFilter = f => {
+          this.$bus.emit('choose-file', f)
+          this.showFilter = false
+        }
         e.preventDefault()
         e.stopPropagation()
       } else if (e.key === 'Escape' && this.showFilter) {
@@ -147,6 +173,7 @@ export default {
 <style scoped>
 .side {
   color: #ddd;
+  background: #282a2b;
 }
 
 .filter-wrapper {

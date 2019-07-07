@@ -29,7 +29,7 @@
         </div>
       </div>
     </div>
-    <div :class="{'scroll-to-top': true, 'hide': scrollTop < 30}" @click="scrollToTop">TOP</div>
+    <div :class="{'scroll-to-top': true, 'show-xterm': showXterm, 'hide': scrollTop < 30}" @click="scrollToTop">TOP</div>
     <article ref="view" class="markdown-body" @click="handleClick"></article>
   </div>
 </template>
@@ -38,6 +38,7 @@
 import 'github-markdown-css/github-markdown.css'
 import 'highlight.js/styles/atom-one-dark.css'
 import _ from 'lodash'
+import mime from 'mime-types'
 import Markdown from 'markdown-it'
 import TaskLists from 'markdown-it-task-lists'
 import katex from 'markdown-it-katex'
@@ -45,15 +46,17 @@ import MarkdownItAttrs from 'markdown-it-attrs'
 import MultimdTable from 'markdown-it-multimd-table'
 import Highlight from 'highlight.js'
 
-import MarkdownItToc from './TocPlugin'
-import RunPlugin from './RunPlugin'
-import SourceLinePlugin from './SourceLinePlugin'
-import LinkTargetPlugin from './LinkTargetPlugin'
-import PlantumlPlugin from './PlantumlPlugin'
-import MermaidPlugin from './MermaidPlugin'
+import HighlightLineNumber from '../plugins/HightLightNumberPlugin'
+import MarkdownItToc from '../plugins/TocPlugin'
+import MarkdownItECharts from '../plugins/EChartsPlugin'
+import RunPlugin from '../plugins/RunPlugin'
+import SourceLinePlugin from '../plugins/SourceLinePlugin'
+import LinkTargetPlugin from '../plugins/LinkTargetPlugin'
+import PlantumlPlugin from '../plugins/PlantumlPlugin'
 import file from '../file'
 
 import 'katex/dist/katex.min.css'
+HighlightLineNumber.addStyles()
 
 export default {
   name: 'xview',
@@ -61,7 +64,8 @@ export default {
     value: String,
     fileRepo: String,
     fileName: String,
-    filePath: String
+    filePath: String,
+    showXterm: Boolean
   },
   data () {
     return {
@@ -84,16 +88,16 @@ export default {
           return ''
         }
       })
-        .use(TaskLists, {enabled: true})
-        .use(MermaidPlugin)
+        .use(TaskLists, { enabled: true })
         .use(PlantumlPlugin)
         .use(RunPlugin)
         .use(katex)
         .use(SourceLinePlugin)
         .use(MarkdownItAttrs)
         .use(LinkTargetPlugin)
-        .use(MultimdTable, {enableMultilineRows: true})
+        .use(MultimdTable, { enableMultilineRows: true })
         .use(MarkdownItToc)
+        .use(MarkdownItECharts)
     }
   },
   mounted () {
@@ -103,11 +107,25 @@ export default {
 
     this.render = _.debounce(() => {
       this.$refs.view.innerHTML = this.markdown.render(this.replaceRelativeLink(this.value))
-      MermaidPlugin.update()
+      MarkdownItECharts.update()
       this.updateOutline()
       this.updateTodoCount()
       this.updatePlantumlDebounce()
-    }, 500, {leading: true})
+
+      for (let ele of document.querySelectorAll('code[class^="language-"]')) {
+        HighlightLineNumber.lineNumbersBlock(ele)
+      }
+
+      for (let ele of document.getElementsByTagName('a')) {
+        const href = ele.getAttribute('href')
+        if (href && href.startsWith('#')) {
+          ele.onclick = () => {
+            document.getElementById(href.replace(/^#/, '')).scrollIntoView()
+            return false
+          }
+        }
+      }
+    }, 500, { leading: true })
 
     this.render()
     setTimeout(() => {
@@ -123,6 +141,15 @@ export default {
       this.syncScroll(1)
     },
     replaceRelativeLink (md) {
+      if (!this.fileRepo) {
+        return md
+      }
+
+      if (this.fileRepo === '__readme__') {
+        return md.replace(/\[([^\]]*)\]\((\.\/[^)]*)\)/g, `[$1](api/readme/file?path=$2)`)
+          .replace(/<img([^>]*)src=["']?([^\s'"]*)["']?/ig, `<img$1src="api/readme/file?path=$2"`)
+      }
+
       if (!this.filePath) {
         return md
       }
@@ -183,12 +210,15 @@ export default {
             img.src.startsWith('http://') ||
             img.src.startsWith('https://')
           ) {
-            const ximg = document.createElement('img')
-            ximg.crossOrigin = 'anonymous'
-            ximg.src = `api/proxy?url=${encodeURI(img.src)}`
-            ximg.onload = () => {
-              transform(ximg)
-            }
+            window.fetch(`api/proxy?url=${encodeURI(img.src)}`).then(r => {
+              r.blob().then(blob => {
+                const imgFile = new File([blob], 'file.' + mime.extension(r.headers.get('content-type')))
+                file.upload(this.fileRepo, this.filePath, imgFile, result => {
+                  this.$bus.emit('tree-refresh')
+                  this.$bus.emit('editor-replace-value', img.src, encodeURI(result.relativePath))
+                })
+              })
+            })
           }
 
           return
@@ -229,6 +259,8 @@ export default {
       }
     },
     convertFile (type) {
+      MarkdownItECharts.preparePrint()
+
       const baseUrl = location.origin + location.pathname.substring(0, location.pathname.lastIndexOf('/')) + '/'
 
       this.convert = {
@@ -236,6 +268,7 @@ export default {
         html: this.$refs.view.outerHTML.replace(/src="api/g, `src="${baseUrl}api`),
         type
       }
+      MarkdownItECharts.update()
       setTimeout(() => {
         this.$refs.convertForm.submit()
       }, 300)
@@ -281,10 +314,15 @@ export default {
     background: inherit;
   }
 
+  .markdown-body /deep/ code {
+    background: #464648;
+  }
+
   .markdown-body /deep/ table tr:nth-child(2n),
-  .markdown-body /deep/ pre
+  .markdown-body /deep/ pre,
+  .markdown-body /deep/ pre > code
   {
-    background: #333030;
+    background: #303133;
   }
 
   .markdown-body /deep/ input,
@@ -375,7 +413,7 @@ button:hover {
 }
 
 .outline > .catalog {
-  max-height: 80vh;
+  max-height: 70vh;
   cursor: pointer;
   overflow: auto;
   padding-bottom: 1em;
@@ -391,6 +429,10 @@ button:hover {
 
 .convert {
   font-size: 14px;
+}
+
+.scroll-to-top.show-xterm {
+  bottom: 45vh;
 }
 
 .scroll-to-top {
@@ -428,6 +470,11 @@ button:hover {
   right: -60px;
 }
 
+.markdown-body /deep/ table.hljs-ln tbody {
+  display: table;
+  min-width: 100%;
+}
+
 @media print {
   .outline,
   .scroll-to-top,
@@ -439,10 +486,11 @@ button:hover {
     max-width: 100%;
     width: 100%;
     height: auto;
+    padding: 0;
   }
 }
 
-@media (max-width: 767px) {
+@media screen and (max-width: 767px) {
   .view {
     padding: 15px;
   }
@@ -467,5 +515,65 @@ button:hover {
 
 .view .new-page {
   page-break-before: always;
+}
+
+.view .echarts {
+  width: 100%;
+  height: 350px;
+}
+
+.view .hljs-ln,
+.view .hljs-ln tr,
+.view .hljs-ln td {
+  border: 0;
+}
+
+.view .hljs-ln td {
+  padding: 0;
+}
+
+@media screen {
+  .view table.hljs-ln {
+    max-height: 400px;
+  }
+}
+
+@media print {
+  .view table.hljs-ln td {
+    white-space: pre-wrap;
+  }
+
+  .view .run-in-xterm {
+    display: none;
+  }
+}
+
+.view table.hljs-ln {
+  padding-bottom: 10px;
+}
+
+.view table.hljs-ln tr:nth-child(even) {
+  background: rgba(110, 110, 110, .05)
+}
+
+.view .hljs-ln td.hljs-ln-numbers {
+  -webkit-touch-callout: none;
+  -webkit-user-select: none;
+  -khtml-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+  user-select: none;
+
+  text-align: center;
+  border-right: 1px solid #777;
+  vertical-align: top;
+  padding-right: 5px;
+
+  /* your custom style here */
+}
+
+/* for block of code */
+.view .hljs-ln td.hljs-ln-code {
+  padding-left: 10px;
 }
 </style>

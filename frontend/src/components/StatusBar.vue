@@ -2,8 +2,10 @@
   <div class="status-bar">
     <RepositorySwitch class="left"></RepositorySwitch>
 
-    <div class="view-control right" @click="toggleView">切换预览</div>
-    <div class="wrap-control right" @click="toggleWrap">切换换行</div>
+    <div class="view-control right" @click="toggleReadme" title="Alt + h">README</div>
+    <div class="view-control right" @click="toggleView" title="Alt + v">切换预览</div>
+    <div class="wrap-control right" @click="toggleWrap" title="Alt + w">切换换行</div>
+    <div class="wrap-control right" @click="toggleXterm" title="Alt + o">切换终端</div>
     <div class="document-info right">
       <span>行：{{documentInfo.line}}</span>
       <span>列：{{documentInfo.column}}</span>
@@ -50,6 +52,12 @@ export default {
     toggleView () {
       this.$bus.emit('toggle-view')
     },
+    toggleXterm () {
+      this.$bus.emit('toggle-xterm')
+    },
+    toggleReadme () {
+      this.$bus.emit('toggle-readme')
+    },
     toggleWrap () {
       this.$bus.emit('editor-toggle-wrap')
     },
@@ -60,8 +68,20 @@ export default {
         e.stopPropagation()
       }
 
+      if (e.key === 'o' && e.altKey) {
+        this.toggleXterm()
+        e.preventDefault()
+        e.stopPropagation()
+      }
+
       if (e.key === 'w' && e.altKey) {
         this.toggleWrap()
+        e.preventDefault()
+        e.stopPropagation()
+      }
+
+      if (e.key === 'h' && e.altKey) {
+        this.toggleReadme()
         e.preventDefault()
         e.stopPropagation()
       }

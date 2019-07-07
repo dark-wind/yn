@@ -2,36 +2,35 @@
   <div>
     <header class="header" :style="unsaved ? 'background: orange' : ''">
       <div>
-        <h4 style="margin: 0;text-align: center">
-          <span v-if="file">
-            {{ file.path }}-{{ status }} [{{file.repo}}]
-          </span>
-          <span v-else>
-            未打开文件
-          </span>
-        </h4>
+        <h4 style="margin: 0;text-align: center"> {{statusText}}</h4>
       </div>
     </header>
     <div style="display: flex; justify-content: space-between;" :class="{'show-view': showView}">
       <Tree ref="tree" class="tree" v-model="file"></Tree>
-      <Editor
-        ref="editor"
-        class="editor"
-        v-model="value"
-        @ready="editorReady"
-        @scroll-line="syncScrollView"
-        @paste-img="pasteImg"
-        @upload-file="uploadFile"
-        @save="saveFile"></Editor>
-      <XView
-        ref="view"
-        class="view"
-        :value="value"
-        :file-name="fileName"
-        :file-path="filePath"
-        :file-repo="fileRepo"
-        @sync-scroll="syncScrollEditor"
-        @switch-todo="switchTodoEditor"></XView>
+      <div class="content" style="flex-direction: column;">
+        <div :class="{content: true, 'show-xterm': showXterm}">
+          <Editor
+            ref="editor"
+            class="editor"
+            v-model="value"
+            @ready="editorReady"
+            @scroll-line="syncScrollView"
+            @paste-img="pasteImg"
+            @upload-file="uploadFile"
+            @save="saveFile"></Editor>
+          <XView
+            ref="view"
+            class="view"
+            :value="value"
+            :file-name="fileName"
+            :file-path="filePath"
+            :file-repo="fileRepo"
+            :show-xterm="showXterm"
+            @sync-scroll="syncScrollEditor"
+            @switch-todo="switchTodoEditor"></XView>
+        </div>
+        <Xterm ref="xterm" v-show="showXterm" class="xterm"></Xterm>
+      </div>
     </div>
     <div class="status-bar">
       <StatusBar></StatusBar>
@@ -43,14 +42,15 @@
 import dayjs from 'dayjs'
 import Editor from '../components/Editor'
 import XView from '../components/View'
+import Xterm from '../components/Xterm'
 import Tree from '../components/Tree'
 import StatusBar from '../components/StatusBar'
-import RunPlugin from '../components/RunPlugin'
+import RunPlugin from '../plugins/RunPlugin'
 import File from '../file'
 
 export default {
   name: 'home',
-  components: { XView, Editor, Tree, StatusBar },
+  components: { XView, Editor, Tree, StatusBar, Xterm },
   data () {
     return {
       status: '请选择文件',
@@ -59,7 +59,8 @@ export default {
       file: null,
       oldHash: null,
       timer: null,
-      showView: true
+      showView: true,
+      showXterm: false
     }
   },
   mounted () {
@@ -67,6 +68,8 @@ export default {
     this.restartTimer()
 
     this.$bus.on('toggle-view', this.toggleView)
+    this.$bus.on('toggle-xterm', this.toggleXterm)
+    this.$bus.on('toggle-readme', this.toggleReadme)
 
     window.onbeforeunload = () => {
       return this.unsaved || null
@@ -74,11 +77,38 @@ export default {
   },
   beforeDestroy () {
     this.$bus.off('toggle-view', this.toggleView)
+    this.$bus.off('toggle-xterm', this.toggleXterm)
+    this.$bus.off('toggle-readme', this.toggleReadme)
     this.clearTimer()
   },
   methods: {
+    toggleReadme () {
+      if (this.file && this.file.repo === '__readme__') {
+        this.$refs.tree.closeCurrentFile()
+        this.file = null
+      } else {
+        File.readme(content => {
+          this.file = {
+            repo: '__readme__',
+            title: 'README.md',
+            content
+          }
+        })
+      }
+    },
     toggleView () {
       this.showView = !this.showView
+    },
+    toggleXterm (flag) {
+      this.showXterm = flag === undefined ? !this.showXterm : !!flag
+
+      this.$nextTick(() => {
+        this.$refs.editor.resize()
+
+        if (this.showXterm) {
+          this.$refs.xterm.init()
+        }
+      })
     },
     editorReady () {
       this.$bus.emit('editor-ready')
@@ -91,6 +121,10 @@ export default {
     restartTimer () {
       this.clearTimer()
 
+      if (!(this.file && this.file.repo && this.file.path)) {
+        return
+      }
+
       this.timer = window.setTimeout(() => {
         if (!this.file || this.file.path.endsWith('.c.md')) { // 加密文件不自动保存
           return
@@ -102,7 +136,7 @@ export default {
     saveFile (f = null) {
       const file = f || this.file
 
-      if (!file) {
+      if (!(file && file.repo && file.path)) {
         return
       }
 
@@ -125,13 +159,13 @@ export default {
       })
     },
     pasteImg (file) {
-      File.upload(this.file.repo, this.file.path, file, ({relativePath}) => {
+      File.upload(this.file.repo, this.file.path, file, ({ relativePath }) => {
         this.$refs.tree.change()
         this.$refs.editor.insert(`![图片](${encodeURI(relativePath)})\n`)
       })
     },
     uploadFile (file) {
-      File.upload(this.file.repo, this.file.path, file, ({relativePath}) => {
+      File.upload(this.file.repo, this.file.path, file, ({ relativePath }) => {
         this.$refs.tree.change()
         this.$refs.editor.insert(`附件 [${dayjs().format('YYYY-MM-DD HH:mm')}]：[${file.name} (${(file.size / 1024).toFixed(2)}KiB)](${encodeURI(relativePath).replace('(', '%28').replace(')', '%29')}){class=open target=_blank}\n`)
       }, `${dayjs().format('YYYYMMDDHHmmss')}.${file.name}`)
@@ -158,21 +192,27 @@ export default {
     file (f, oldf) {
       this.clearTimer()
 
-      if (oldf) {
+      if (oldf && oldf.repo && oldf.path) {
         this.saveFile(oldf)
       }
 
       if (f) {
-        File.read(f.repo, f.path, (data, hash) => {
-          this.lastSaveContent = data
-          this.$refs.editor.setValue(data)
-          this.oldHash = hash
-          this.status = '加载完毕'
-          window.document.title = f.name
-        }, e => {
-          this.file = null
-          alert(e.message)
-        })
+        if (f.title) {
+          window.document.title = f.title
+          this.lastSaveContent = f.content
+          this.$refs.editor.setValue(f.content)
+        } else {
+          File.read(f.repo, f.path, (data, hash) => {
+            this.lastSaveContent = data
+            this.$refs.editor.setValue(data)
+            this.oldHash = hash
+            this.status = '加载完毕'
+            window.document.title = f.name
+          }, e => {
+            this.file = null
+            alert(e.message)
+          })
+        }
       } else {
         window.document.title = '未打开文件'
         this.lastSaveContent = '\n'
@@ -180,7 +220,7 @@ export default {
       }
 
       // 切换文件时候定位到第一行
-      this.$refs.editor.setPosition({column: 1, lineNumber: 1})
+      this.$refs.editor.setPosition({ column: 1, lineNumber: 1 })
     }
   },
   computed: {
@@ -195,6 +235,17 @@ export default {
     },
     fileRepo () {
       return this.file ? this.file.repo : null
+    },
+    statusText () {
+      if (this.file) {
+        if (this.file.path && this.file.repo) {
+          return `${this.file.path}-${this.status} [${this.file.repo}]`
+        } else {
+          return this.file.title
+        }
+      } else {
+        return '未打开文件'
+      }
     }
   }
 }
@@ -208,6 +259,7 @@ export default {
     padding-bottom: 20px;
     box-sizing: border-box;
     overflow: auto;
+    flex: 0 0 auto;
   }
 
   .show-view .editor {
@@ -215,7 +267,7 @@ export default {
   }
 
   .editor {
-    height: 95vh;
+    /* height: 95vh; */
     width: 83vw;
     overflow: hidden;
   }
@@ -232,10 +284,23 @@ export default {
     margin: 0 auto;
     padding: 45px;
     width: 43vw;
-    height: 95vh;
+    /* height: 95vh; */
     overflow: auto;
     box-sizing: border-box;
     display: none;
+  }
+
+  .content {
+    display: flex;
+    height: 95vh;
+  }
+
+  .content.show-xterm {
+    height: 55vh;
+  }
+
+  .xterm {
+    height: 40vh;
   }
 }
 
@@ -266,7 +331,11 @@ export default {
 }
 
 @media print {
-  .editor, .header, .tree, .status-bar {
+  .content {
+    width: 100%;
+  }
+
+  .editor, .header, .tree, .status-bar, .xterm {
     display: none;
   }
 

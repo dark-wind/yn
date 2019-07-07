@@ -109,7 +109,7 @@ export default {
         const result = fuzzyMatch(search, x.path)
 
         if (result.matched) {
-          tmp.push({...x})
+          tmp.push({ ...x })
         }
       })
 
@@ -168,7 +168,6 @@ export default {
       const file = item || this.selected
       if (file) {
         this.$emit('choose-file', file)
-        this.$bus.emit('choose-file', file)
       }
     },
     switchTab (tab = null) {
@@ -236,6 +235,7 @@ export default {
   margin: 0;
   border: 0;
   font-size: 18px;
+  line-height: 1.4em;
   padding: 6px;
   box-sizing: border-box;
   background: #333030;

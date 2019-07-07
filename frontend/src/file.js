@@ -1,4 +1,5 @@
 import CryptoJS from 'crypto-js'
+import { slugify } from 'transliteration'
 
 const getCryptKey = () => {
   const password = window.prompt('请输入密码：')
@@ -13,6 +14,7 @@ const getCryptKey = () => {
 const encrypt = content => {
   let key = getCryptKey()
   let iv = key
+  const passwordHash = CryptoJS.MD5(key).toString()
 
   key = CryptoJS.enc.Utf8.parse(key)
   iv = CryptoJS.enc.Utf8.parse(iv)
@@ -23,12 +25,13 @@ const encrypt = content => {
     padding: CryptoJS.pad.Pkcs7
   })
 
-  return encrypted.toString()
+  return { content: encrypted.toString(), passwordHash }
 }
 
 const decrypt = content => {
   let key = getCryptKey()
   let iv = key
+  const passwordHash = CryptoJS.MD5(key).toString()
 
   key = CryptoJS.enc.Utf8.parse(key)
   iv = CryptoJS.enc.Utf8.parse(iv)
@@ -44,9 +47,10 @@ const decrypt = content => {
     throw new Error('解密失败！！！')
   }
 
-  return result
+  return { content: result, passwordHash }
 }
 
+const oldPasswordHash = {}
 export default {
   read: (repo, path, call, ecall) => {
     fetch(`/api/file?path=${encodeURIComponent(path)}&repo=${repo}`).then(response => {
@@ -55,7 +59,9 @@ export default {
           try {
             let content = result.data.content
             if (path.endsWith('.c.md')) {
-              content = decrypt(content)
+              const data = decrypt(content)
+              content = data.content
+              oldPasswordHash[`${repo}_${path}`] = data.passwordHash
             }
 
             call(content, result.data.hash)
@@ -75,7 +81,16 @@ export default {
   write: (repo, path, content, oldHash, call, ecall) => {
     try {
       if (path.endsWith('.c.md')) {
-        content = encrypt(content)
+        const data = encrypt(content)
+        const oldPasswdHash = oldPasswordHash[`${repo}_${path}`]
+        if (oldPasswdHash) {
+          if (oldPasswdHash !== data.passwordHash && !window.confirm('密码和上一次输入的密码不一致，是否用新密码保存？')) {
+            return
+          }
+
+          delete oldPasswordHash[`${repo}_${path}`]
+        }
+        content = data.content
       }
     } catch (e) {
       if (ecall) {
@@ -87,8 +102,8 @@ export default {
 
     fetch('/api/file', {
       method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({repo, path, content, old_hash: oldHash})
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo, path, content, old_hash: oldHash })
     }).then(response => {
       response.json().then(result => {
         if (result.status === 'ok') {
@@ -102,8 +117,8 @@ export default {
   move: (repo, oldPath, newPath, call) => {
     fetch('/api/file', {
       method: 'PATCH',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({repo, oldPath, newPath})
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ repo, oldPath, newPath })
     }).then(response => {
       response.json().then(result => {
         if (result.status === 'ok') {
@@ -126,7 +141,7 @@ export default {
     })
   },
   delete: (repo, path, call) => {
-    fetch(`/api/file?path=${encodeURIComponent(path)}&repo=${repo}`, {method: 'DELETE'}).then(response => {
+    fetch(`/api/file?path=${encodeURIComponent(path)}&repo=${repo}`, { method: 'DELETE' }).then(response => {
       response.json().then(result => {
         if (result.status === 'ok') {
           call(result)
@@ -146,7 +161,9 @@ export default {
         file.name.substr(file.name.lastIndexOf('.'))
 
       const formData = new FormData()
-      const path = belongPath.replace(/\/([^/]*)$/, '/FILES/$1/' + filename)
+      const path = belongPath.replace(/\/([^/]*)$/, (match, capture) => {
+        return `/FILES/${slugify(capture)}/` + filename
+      })
       formData.append('repo', repo)
       formData.append('path', path)
       formData.append('attachment', file)
@@ -193,5 +210,16 @@ export default {
   },
   openInOS (repo, path) {
     fetch(`/api/open?repo=${encodeURIComponent(repo)}&path=${encodeURIComponent(path)}`)
+  },
+  readme (call) {
+    fetch('/api/readme').then(response => {
+      response.json().then(result => {
+        if (result.status === 'ok') {
+          call(result.data.content)
+        } else {
+          alert(result.message)
+        }
+      })
+    })
   }
 }

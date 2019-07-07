@@ -1,9 +1,12 @@
+const fs = require('fs')
+const os = require('os')
 const path = require('path')
 const Koa = require('koa')
 const bodyParser = require('koa-body')
 const static = require('koa-static')
 const mime = require('mime')
 const request = require('request')
+const pty = require('node-pty')
 
 const file = require('./file')
 const dataRepository = require('./repository')
@@ -139,6 +142,21 @@ const proxy = async (ctx, next) => {
     }
 }
 
+const readme = async (ctx, next) => {
+    if (ctx.path.startsWith('/api/readme')) {
+        if (ctx.query.path) {
+            ctx.type = mime.getType(ctx.query.path)
+            ctx.body = fs.readFileSync(path.join(__dirname, '../', ctx.query.path))
+        } else {
+            ctx.body = result('ok', '获取成功', {
+                content: fs.readFileSync(path.join(__dirname, '../README.md')).toString()
+            })
+        }
+    } else {
+        await next()
+    }
+}
+
 const app = new Koa()
 
 app.use(static(
@@ -169,8 +187,28 @@ app.use(async (ctx, next) => await wrapper(ctx, next, convertFile))
 app.use(async (ctx, next) => await wrapper(ctx, next, searchFile))
 app.use(async (ctx, next) => await wrapper(ctx, next, repository))
 app.use(async (ctx, next) => await wrapper(ctx, next, proxy))
+app.use(async (ctx, next) => await wrapper(ctx, next, readme))
 
 const port = 3000
-app.listen(port)
+
+const server = require('http').createServer(app.callback())
+const io = require('socket.io')(server, {path: '/ws'})
+
+io.on('connection', socket => {
+    const ptyProcess = pty.spawn(os.platform() === 'win32' ? 'cmd.exe' : 'bash', [], {
+        name: 'xterm-color',
+        cols: 80,
+        rows: 24,
+        cwd: path.join(__dirname, '../'),
+        env: process.env
+    })
+    ptyProcess.on('data', data => socket.emit('output', data))
+    ptyProcess.on('exit', () => socket.disconnect())
+    socket.on('input', data => ptyProcess.write(data))
+    socket.on('resize', size => ptyProcess.resize(size[0], size[1]))
+    socket.on('disconnect', () => ptyProcess.destroy())
+})
+
+server.listen(port)
 
 console.log(`访问地址：http://localhost:${port}`)
